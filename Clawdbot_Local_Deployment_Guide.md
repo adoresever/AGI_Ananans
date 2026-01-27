@@ -407,11 +407,9 @@ explorer $env:USERPROFILE\.clawdbot
 
 > **提示**：完整配置文件示例请参考 [附录：完整配置文件示例](#附录完整配置文件示例)
 
-#### 1.5.3 或使用配置向导
-
-```bash
-pnpm clawdbot configure --section gateway
-```
+pkill -f "node.*gateway"
+sleep 2
+OLLAMA_API_KEY="ollama-local" pnpm clawdbot gateway --verbose
 
 选择：
 - Provider: **ollama**

@@ -41,7 +41,7 @@ node --version  # 应显示 v22.x.x
 
 ```bash
 # 克隆项目
-git clone https://github.com/anthropics/clawdbot.git
+git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 
 # 安装依赖

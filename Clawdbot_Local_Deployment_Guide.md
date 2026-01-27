@@ -10,7 +10,8 @@
 2. [第二部分：网络搜索 API 配置](#第二部分网络搜索-api-配置)
 3. [第三部分：Discord Bot 配置](#第三部分discord-bot-配置)
 4. [第四部分：启动与验证](#第四部分启动与验证)
-5. [常见问题](#常见问题)
+5. [附录：完整配置文件示例](#附录完整配置文件示例)
+6. [常见问题](#常见问题)
 
 ---
 
@@ -197,7 +198,7 @@ export const providers = {
 
 #### 1.4.1 编辑配置文件
 
-编辑 `~/.clawdbot/clawdbot.json`：
+编辑 `~/.clawdbot/clawdbot.json`，修改 `agents.defaults.model.primary` 字段：
 
 ```json
 {
@@ -210,6 +211,8 @@ export const providers = {
   }
 }
 ```
+
+> **提示**：完整配置文件示例请参考 [附录：完整配置文件示例](#附录完整配置文件示例)
 
 #### 1.4.2 或使用配置向导
 
@@ -432,6 +435,130 @@ pnpm clawdbot logs --follow
 
 ---
 
+## 附录：完整配置文件示例
+
+### clawdbot.json 完整配置
+
+文件路径：`~/.clawdbot/clawdbot.json`
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/home/wang/clawd",
+      "model": {
+        "primary": "ollama/qwen3:30b-a3b"
+      }
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "your-secure-token-here"
+    },
+    "port": 18789,
+    "bind": "loopback",
+    "tailscale": {
+      "mode": "off",
+      "resetOnExit": false
+    }
+  },
+  "auth": {
+    "profiles": {
+      "zai:default": {
+        "provider": "zai",
+        "mode": "api_key"
+      }
+    }
+  },
+  "skills": {
+    "install": {
+      "nodeManager": "npm"
+    }
+  },
+  "web": {
+    "search": {
+      "enabled": true,
+      "provider": "brave",
+      "apiKey": "your-brave-api-key"
+    },
+    "fetch": {
+      "enabled": true
+    }
+  },
+  "wizard": {
+    "lastRunAt": "2026-01-27T02:06:49.956Z",
+    "lastRunVersion": "2026.1.25",
+    "lastRunCommand": "onboard",
+    "lastRunMode": "local"
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.1.25",
+    "lastTouchedAt": "2026-01-27T02:06:49.972Z"
+  }
+}
+```
+
+### 配置字段说明
+
+| 字段 | 说明 |
+|------|------|
+| `agents.defaults.workspace` | Agent 工作目录，用于文件操作 |
+| `agents.defaults.model.primary` | 默认使用的模型，格式为 `provider/model-name` |
+| `gateway.mode` | 网关模式，`local` 表示本地部署 |
+| `gateway.auth.token` | 访问 Gateway 的认证令牌 |
+| `gateway.port` | Gateway 监听端口，默认 18789 |
+| `gateway.bind` | 绑定地址，`loopback` 仅本地访问 |
+| `web.search.enabled` | 是否启用网络搜索 |
+| `web.search.provider` | 搜索提供商，推荐 `brave` |
+| `web.search.apiKey` | Brave Search API Key |
+| `web.fetch.enabled` | 是否启用网页抓取 |
+
+### 配置修改示例
+
+#### 修改默认模型
+
+将 `agents.defaults.model.primary` 改为你想使用的模型：
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "ollama/glm-4.7-flash:latest"
+      }
+    }
+  }
+}
+```
+
+#### 修改工作目录
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "workspace": "/your/custom/path"
+    }
+  }
+}
+```
+
+#### 允许远程访问 Gateway
+
+> ⚠️ 注意安全风险，仅在信任的网络中使用
+
+```json
+{
+  "gateway": {
+    "bind": "0.0.0.0"
+  }
+}
+```
+
+---
+
 ## 常见问题
 
 ### Q1: `pnpm: command not found`
@@ -487,6 +614,29 @@ ollama create qwen3:30b-a3b -f /tmp/Modelfile
 2. 开启 **Message Content Intent**
 3. 开启 **Server Members Intent**
 4. 保存并重启 Gateway
+
+### Q6: 如何查看当前配置
+
+```bash
+# 查看配置文件
+cat ~/.clawdbot/clawdbot.json
+
+# 或使用 jq 格式化输出（需安装 jq）
+cat ~/.clawdbot/clawdbot.json | jq .
+```
+
+### Q7: 配置文件语法错误
+
+**症状**：Gateway 启动失败，提示 JSON 解析错误
+
+**解决方案**：
+```bash
+# 验证 JSON 语法
+cat ~/.clawdbot/clawdbot.json | python3 -m json.tool
+
+# 或使用 jq
+cat ~/.clawdbot/clawdbot.json | jq .
+```
 
 ---
 

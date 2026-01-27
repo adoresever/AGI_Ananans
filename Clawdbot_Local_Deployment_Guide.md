@@ -10,8 +10,8 @@
 2. [第二部分：网络搜索 API 配置](#第二部分网络搜索-api-配置)
 3. [第三部分：Discord Bot 配置](#第三部分discord-bot-配置)
 4. [第四部分：启动与验证](#第四部分启动与验证)
-5. [附录：完整配置文件示例](#附录完整配置文件示例)
-6. [常见问题](#常见问题)
+5. [常见问题](#常见问题)
+6. [附录：完整配置文件示例](#附录完整配置文件示例)
 
 ---
 
@@ -20,6 +20,8 @@
 ### 1.1 安装 Clawdbot
 
 #### 1.1.1 安装 Node.js 22 (使用 nvm)
+
+**Linux / macOS：**
 
 ```bash
 # 安装 nvm
@@ -36,6 +38,21 @@ nvm use 22
 
 # 验证安装
 node --version  # 应显示 v22.x.x
+```
+
+**Windows：**
+
+```powershell
+# 方式一：使用 nvm-windows（推荐）
+# 下载安装：https://github.com/coreybutler/nvm-windows/releases
+nvm install 22
+nvm use 22
+
+# 方式二：直接下载 Node.js 安装包
+# https://nodejs.org/ 下载 LTS 版本
+
+# 验证安装
+node --version
 ```
 
 #### 1.1.2 克隆并构建 Clawdbot
@@ -71,13 +88,20 @@ pnpm clawdbot gateway --verbose
 
 #### 1.2.1 安装 Ollama
 
+**Linux：**
+
 ```bash
-# Linux
 curl -fsSL https://ollama.com/install.sh | sh
 
 # 启动 Ollama 服务
 ollama serve
 ```
+
+**Windows：**
+
+1. 访问 https://ollama.com/download
+2. 下载 Windows 安装包并运行
+3. 安装完成后 Ollama 会自动作为服务运行
 
 #### 1.2.2 下载模型
 
@@ -92,6 +116,8 @@ ollama list
 #### 1.2.3 增加上下文长度（关键步骤！）
 
 > **为什么需要这一步？** Ollama 默认上下文长度只有 2048 tokens，网络搜索结果会被截断导致回复异常。需要增加到 32K。
+
+**Linux / macOS：**
 
 ```bash
 # 创建 Modelfile
@@ -108,6 +134,22 @@ ollama show qwen3:30b-a3b --modelfile | grep num_ctx
 # 应输出: PARAMETER num_ctx 32768
 ```
 
+**Windows (PowerShell)：**
+
+```powershell
+# 创建 Modelfile
+@"
+FROM qwen3:30b-a3b
+PARAMETER num_ctx 32768
+"@ | Out-File -FilePath "$env:TEMP\Modelfile" -Encoding UTF8
+
+# 用新配置覆盖原模型
+ollama create qwen3:30b-a3b -f "$env:TEMP\Modelfile"
+
+# 验证配置
+ollama show qwen3:30b-a3b --modelfile | Select-String "num_ctx"
+```
+
 ---
 
 ### 1.3 注册 Ollama 模型到 pi-ai 库
@@ -116,10 +158,19 @@ ollama show qwen3:30b-a3b --modelfile | grep num_ctx
 
 #### 1.3.1 找到配置文件
 
+**Linux / macOS：**
+
 ```bash
 # 在 clawdbot 目录下查找文件
 cd /path/to/clawdbot
 find node_modules/.pnpm -name "models.generated.js" | grep pi-ai
+```
+
+**Windows (PowerShell)：**
+
+```powershell
+cd C:\path\to\clawdbot
+Get-ChildItem -Recurse -Filter "models.generated.js" | Where-Object { $_.FullName -like "*pi-ai*" }
 ```
 
 典型路径：
@@ -196,9 +247,48 @@ export const providers = {
 
 ### 1.4 配置 Clawdbot 使用 Ollama
 
-#### 1.4.1 编辑配置文件
+#### 1.4.1 打开配置文件目录
 
-编辑 `~/.clawdbot/clawdbot.json`，修改 `agents.defaults.model.primary` 字段：
+**Linux / macOS：**
+
+```bash
+# 查看配置文件
+cat ~/.clawdbot/clawdbot.json
+
+# 用编辑器打开
+nano ~/.clawdbot/clawdbot.json
+# 或
+code ~/.clawdbot/clawdbot.json
+
+# 在文件管理器中打开目录
+xdg-open ~/.clawdbot/          # Linux
+open ~/.clawdbot/              # macOS
+```
+
+**Windows：**
+
+```powershell
+# 查看配置文件
+type $env:USERPROFILE\.clawdbot\clawdbot.json
+
+# 用记事本打开
+notepad $env:USERPROFILE\.clawdbot\clawdbot.json
+
+# 用 VS Code 打开
+code $env:USERPROFILE\.clawdbot\clawdbot.json
+
+# 在文件资源管理器中打开目录
+explorer $env:USERPROFILE\.clawdbot
+
+# 或直接在地址栏输入
+# %USERPROFILE%\.clawdbot
+```
+
+> **Windows 配置文件路径**：`C:\Users\你的用户名\.clawdbot\clawdbot.json`
+
+#### 1.4.2 编辑配置文件
+
+修改 `agents.defaults.model.primary` 字段：
 
 ```json
 {
@@ -214,7 +304,7 @@ export const providers = {
 
 > **提示**：完整配置文件示例请参考 [附录：完整配置文件示例](#附录完整配置文件示例)
 
-#### 1.4.2 或使用配置向导
+#### 1.4.3 或使用配置向导
 
 ```bash
 pnpm clawdbot configure --section gateway
@@ -249,12 +339,21 @@ BSAA38I07_L-TWOVNjscxx-GmfEcCPA
 
 #### 2.2.1 运行配置向导
 
+**Linux / macOS：**
+
 ```bash
 cd /path/to/clawdbot
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 nvm use 22
 
+pnpm clawdbot configure --section web
+```
+
+**Windows (PowerShell)：**
+
+```powershell
+cd C:\path\to\clawdbot
 pnpm clawdbot configure --section web
 ```
 
@@ -394,6 +493,8 @@ pnpm clawdbot channels status --probe
 
 ### 4.1 启动 Gateway
 
+**Linux / macOS：**
+
 ```bash
 cd /path/to/clawdbot
 
@@ -404,6 +505,25 @@ nvm use 22
 
 # 启动 Gateway
 OLLAMA_API_KEY="ollama-local" pnpm clawdbot gateway --verbose
+```
+
+**Windows (PowerShell)：**
+
+```powershell
+cd C:\path\to\clawdbot
+
+# 设置环境变量并启动
+$env:OLLAMA_API_KEY="ollama-local"
+pnpm clawdbot gateway --verbose
+```
+
+**Windows (CMD)：**
+
+```cmd
+cd C:\path\to\clawdbot
+
+set OLLAMA_API_KEY=ollama-local
+pnpm clawdbot gateway --verbose
 ```
 
 ### 4.2 验证各组件状态
@@ -435,11 +555,177 @@ pnpm clawdbot logs --follow
 
 ---
 
+## 常见问题
+
+### Q1: `pnpm: command not found`
+
+**解决方案**：
+
+**Linux / macOS：**
+```bash
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+nvm use 22
+```
+
+**Windows：**
+```powershell
+# 如果使用 nvm-windows
+nvm use 22
+
+# 确保 pnpm 已安装
+npm install -g pnpm
+```
+
+### Q2: Discord Bot 显示 "该应用程序未响应"
+
+**可能原因**：
+1. Gateway 没有运行
+2. Message Content Intent 未开启
+3. Bot Token 未正确配置
+
+**解决方案**：
+```bash
+# 检查状态
+pnpm clawdbot channels status --probe
+
+# 如果显示 token:none，重新配置
+pnpm clawdbot configure --section channels
+```
+
+### Q3: 网络搜索结果混乱或不相关
+
+**原因**：Ollama 上下文长度不够，搜索结果被截断
+
+**解决方案**：
+```bash
+# 重新配置模型上下文
+cat > /tmp/Modelfile << 'EOF'
+FROM qwen3:30b-a3b
+PARAMETER num_ctx 32768
+EOF
+
+ollama create qwen3:30b-a3b -f /tmp/Modelfile
+```
+
+### Q4: `api undefined` 错误
+
+**原因**：模型未在 `models.generated.js` 中注册
+
+**解决方案**：参考 [1.3 节](#13-注册-ollama-模型到-pi-ai-库) 添加模型定义
+
+### Q5: Discord 显示 "Used disallowed intents"
+
+**解决方案**：
+1. 去 Discord Developer Portal → Bot
+2. 开启 **Message Content Intent**
+3. 开启 **Server Members Intent**
+4. 保存并重启 Gateway
+
+### Q6: 如何查看当前配置
+
+**Linux / macOS：**
+```bash
+cat ~/.clawdbot/clawdbot.json
+
+# 或使用 jq 格式化输出
+cat ~/.clawdbot/clawdbot.json | jq .
+```
+
+**Windows：**
+```powershell
+# 查看配置
+type $env:USERPROFILE\.clawdbot\clawdbot.json
+
+# 格式化输出（需要安装 jq 或使用 PowerShell）
+Get-Content $env:USERPROFILE\.clawdbot\clawdbot.json | ConvertFrom-Json | ConvertTo-Json -Depth 10
+```
+
+### Q7: 配置文件语法错误
+
+**症状**：Gateway 启动失败，提示 JSON 解析错误
+
+**解决方案**：
+
+**Linux / macOS：**
+```bash
+cat ~/.clawdbot/clawdbot.json | python3 -m json.tool
+```
+
+**Windows：**
+```powershell
+Get-Content $env:USERPROFILE\.clawdbot\clawdbot.json | ConvertFrom-Json
+```
+
+### Q8: Windows 找不到配置文件目录
+
+**解决方案**：
+
+1. 按 `Win + R` 打开运行对话框
+2. 输入 `%USERPROFILE%\.clawdbot` 回车
+3. 或在文件资源管理器地址栏直接输入上述路径
+
+---
+
+## 配置文件汇总
+
+| 文件路径 | 用途 |
+|---------|------|
+| `~/.clawdbot/clawdbot.json` | Clawdbot 主配置文件 |
+| `~/.clawdbot/.env` | 环境变量 |
+| `~/.clawdbot/credentials/` | 凭证存储 |
+| `models.generated.js` | pi-ai 模型注册 |
+| `/tmp/Modelfile` | Ollama 模型配置 |
+
+**Windows 路径对照：**
+
+| Linux/macOS | Windows |
+|-------------|---------|
+| `~/.clawdbot/` | `C:\Users\用户名\.clawdbot\` 或 `%USERPROFILE%\.clawdbot\` |
+| `/tmp/Modelfile` | `%TEMP%\Modelfile` |
+
+---
+
+## 快速启动命令汇总
+
+**Linux / macOS：**
+
+```bash
+# 每次启动前运行
+cd /path/to/clawdbot
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+nvm use 22
+
+# 启动 Ollama（如果未运行）
+ollama serve &
+
+# 启动 Clawdbot Gateway
+OLLAMA_API_KEY="ollama-local" pnpm clawdbot gateway --verbose
+```
+
+**Windows (PowerShell)：**
+
+```powershell
+# 每次启动前运行
+cd C:\path\to\clawdbot
+
+# Ollama 在 Windows 上会自动作为服务运行，无需手动启动
+
+# 启动 Clawdbot Gateway
+$env:OLLAMA_API_KEY="ollama-local"
+pnpm clawdbot gateway --verbose
+```
+
+---
+
 ## 附录：完整配置文件示例
 
 ### clawdbot.json 完整配置
 
-文件路径：`~/.clawdbot/clawdbot.json`
+文件路径：
+- **Linux / macOS**：`~/.clawdbot/clawdbot.json`
+- **Windows**：`C:\Users\你的用户名\.clawdbot\clawdbot.json` 或 `%USERPROFILE%\.clawdbot\clawdbot.json`
 
 ```json
 {
@@ -500,6 +786,8 @@ pnpm clawdbot logs --follow
 }
 ```
 
+> **Windows 用户注意**：`workspace` 路径需要改为 Windows 格式，例如 `"workspace": "C:\\Users\\wang\\clawd"` 或使用正斜杠 `"workspace": "C:/Users/wang/clawd"`
+
 ### 配置字段说明
 
 | 字段 | 说明 |
@@ -535,11 +823,23 @@ pnpm clawdbot logs --follow
 
 #### 修改工作目录
 
+**Linux / macOS：**
 ```json
 {
   "agents": {
     "defaults": {
       "workspace": "/your/custom/path"
+    }
+  }
+}
+```
+
+**Windows：**
+```json
+{
+  "agents": {
+    "defaults": {
+      "workspace": "C:/Users/yourname/clawdbot-workspace"
     }
   }
 }
@@ -555,117 +855,6 @@ pnpm clawdbot logs --follow
     "bind": "0.0.0.0"
   }
 }
-```
-
----
-
-## 常见问题
-
-### Q1: `pnpm: command not found`
-
-**解决方案**：
-```bash
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-nvm use 22
-```
-
-### Q2: Discord Bot 显示 "该应用程序未响应"
-
-**可能原因**：
-1. Gateway 没有运行
-2. Message Content Intent 未开启
-3. Bot Token 未正确配置
-
-**解决方案**：
-```bash
-# 检查状态
-pnpm clawdbot channels status --probe
-
-# 如果显示 token:none，重新配置
-pnpm clawdbot configure --section channels
-```
-
-### Q3: 网络搜索结果混乱或不相关
-
-**原因**：Ollama 上下文长度不够，搜索结果被截断
-
-**解决方案**：
-```bash
-# 重新配置模型上下文
-cat > /tmp/Modelfile << 'EOF'
-FROM qwen3:30b-a3b
-PARAMETER num_ctx 32768
-EOF
-
-ollama create qwen3:30b-a3b -f /tmp/Modelfile
-```
-
-### Q4: `api undefined` 错误
-
-**原因**：模型未在 `models.generated.js` 中注册
-
-**解决方案**：参考 [1.3 节](#13-注册-ollama-模型到-pi-ai-库) 添加模型定义
-
-### Q5: Discord 显示 "Used disallowed intents"
-
-**解决方案**：
-1. 去 Discord Developer Portal → Bot
-2. 开启 **Message Content Intent**
-3. 开启 **Server Members Intent**
-4. 保存并重启 Gateway
-
-### Q6: 如何查看当前配置
-
-```bash
-# 查看配置文件
-cat ~/.clawdbot/clawdbot.json
-
-# 或使用 jq 格式化输出（需安装 jq）
-cat ~/.clawdbot/clawdbot.json | jq .
-```
-
-### Q7: 配置文件语法错误
-
-**症状**：Gateway 启动失败，提示 JSON 解析错误
-
-**解决方案**：
-```bash
-# 验证 JSON 语法
-cat ~/.clawdbot/clawdbot.json | python3 -m json.tool
-
-# 或使用 jq
-cat ~/.clawdbot/clawdbot.json | jq .
-```
-
----
-
-## 配置文件汇总
-
-| 文件路径 | 用途 |
-|---------|------|
-| `~/.clawdbot/clawdbot.json` | Clawdbot 主配置文件 |
-| `~/.clawdbot/.env` | 环境变量 |
-| `~/.clawdbot/credentials/` | 凭证存储 |
-| `models.generated.js` | pi-ai 模型注册 |
-| `/tmp/Modelfile` | Ollama 模型配置 |
-
----
-
-## 快速启动命令汇总
-
-```bash
-# 每次启动前运行
-cd /path/to/clawdbot
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-nvm use 22
-
-# 启动 Ollama（如果未运行）
-ollama serve &
-
-# 启动 Clawdbot Gateway
-OLLAMA_API_KEY="ollama-local" pnpm clawdbot gateway --verbose
 ```
 
 ---

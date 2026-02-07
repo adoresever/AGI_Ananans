@@ -1,0 +1,72 @@
+---
+name: xiaohongshu-scraper
+description: 抓取小红书笔记内容并保存到Obsidian。当用户发送包含"xiaohongshu.com"或"xhslink.com"的链接，或提到"抓取小红书"、"保存小红书"、"小红书笔记"时，使用此技能。
+---
+
+# 小红书内容抓取与保存
+
+## 使用方法
+
+当用户发送小红书链接时，按以下步骤执行：
+
+### 第一步：用 Jina Reader 抓取内容（首选）
+
+使用 exec 工具执行以下命令（将 URL 替换为实际链接）：
+
+```
+{{NPX_PATH}} mcporter call jina.read_url --config {{MCPORTER_CONFIG}} --args '{"url":"实际的小红书链接"}'
+```
+
+Jina Reader 会将网页转为干净的 Markdown 格式，包含标题、正文、标签，内容质量最高。
+
+### 第二步：如果 Jina 失败，用 web_fetch 兜底
+
+当 Jina 返回空内容、超时或报错时，改用内置的 web_fetch 工具直接抓取页面内容。web_fetch 是内置工具，稳定性更好。
+
+### 第三步：分析内容并生成摘要
+
+从抓取结果中提取以下信息：
+- 标题
+- 作者
+- 正文内容
+- 标签（hashtag）
+- 生成200字以内的摘要
+- 提炼3-5个关键观点
+
+### 第四步：保存到 Obsidian
+
+使用 write 工具将内容保存为 Markdown 文件。
+
+保存路径：`{{VAULT_PATH}}/`
+文件名格式：`YYYY-MM-DD_标题摘要.md`（标题中的特殊字符替换为下划线）
+
+文件内容模板：
+
+```markdown
+---
+source: （原始链接）
+author: （作者）
+date: （抓取日期）
+tags: （标签列表）
+---
+
+# （标题）
+
+## 摘要
+（AI生成的摘要）
+
+## 关键观点
+（关键要点列表）
+
+## 原文内容
+（完整正文）
+
+---
+*由 OpenClaw 自动抓取保存*
+```
+
+### 注意事项
+- 始终先尝试 Jina Reader，它输出的 Markdown 格式更干净
+- Jina 失败时立即切换 web_fetch，不要重试 Jina
+- 保存成功后告知用户文件名和路径
+- 如果链接包含 xsec_token 等参数，原样传递

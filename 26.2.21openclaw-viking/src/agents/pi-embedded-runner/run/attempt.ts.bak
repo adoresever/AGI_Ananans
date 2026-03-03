@@ -3,6 +3,7 @@ import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { vikingRoute, buildSkillNamesOnlyPrompt } from "../../viking-router.js";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
@@ -327,7 +328,47 @@ export async function runEmbeddedAttempt(
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
         });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
+
+        // ===== OpenViking start =====
+        // 实时扫描 skills，不依赖可能过期的 skillsSnapshot
+        const vikingSkillEntries = loadWorkspaceSkillEntries(effectiveWorkspace);
+        const vikingSkills: Array<{name: string; description: string}> = [];
+        for (const e of vikingSkillEntries) {
+          vikingSkills.push({ name: e.skill.name, description: e.skill.description ?? "" });
+        }
+        log.info(`[viking] skills index (${vikingSkills.length}): [${vikingSkills.map(s => s.name).join(", ")}]`);
+
+        const vikingFileNames = hookAdjustedBootstrapFiles
+          .filter((f) => !f.missing)
+          .map((f) => f.name);
+        const routingDecision = await vikingRoute({
+          prompt: params.prompt,
+          tools: toolsRaw,
+          fileNames: vikingFileNames,
+          skills: vikingSkills,
+          model: params.model,
+          modelRegistry: params.modelRegistry,
+          provider: params.provider,
+        });
+        // 应用路由结果：只保留模型选出的工具
+        const routedToolsRaw = routingDecision.skipped
+          ? toolsRaw
+          : toolsRaw.filter((t) => routingDecision.tools.has(t.name));
+        // 应用路由结果：只保留模型选出的 bootstrap 文件
+        const routedContextFiles = routingDecision.skipped
+          ? contextFiles
+          : contextFiles.filter((f) => {
+              const fileName = f.path.split("/").pop() ?? f.path;
+              return routingDecision.files.has(fileName);
+            });
+        // 应用路由结果：skills 精简模式
+        const routedSkillsPrompt =
+          routingDecision.skillsMode === "names"
+            ? buildSkillNamesOnlyPrompt(vikingSkills)
+            : skillsPrompt;
+        // ===== OpenViking end =====
+
+    const tools = sanitizeToolsForGoogle({ tools: routedToolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
 
     const machineName = await getMachineDisplayName();
@@ -425,7 +466,9 @@ export async function runEmbeddedAttempt(
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
         ? "minimal"
-        : "full";
+        : routingDecision.skipped
+          ? "full"
+          : routingDecision.promptLayer;
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -444,7 +487,7 @@ export async function runEmbeddedAttempt(
       heartbeatPrompt: isDefaultAgent
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
         : undefined,
-      skillsPrompt,
+      skillsPrompt: routedSkillsPrompt,
       docsPath: docsPath ?? undefined,
       ttsHint,
       workspaceNotes,
@@ -458,7 +501,7 @@ export async function runEmbeddedAttempt(
       userTimezone,
       userTime,
       userTimeFormat,
-      contextFiles,
+      contextFiles: routedContextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });
     const systemPromptReport = buildSystemPromptReport({

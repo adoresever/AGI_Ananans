@@ -94,8 +94,12 @@ const DECISIONS_FILE = "decisions.md";
 const TSID_MAP_FILE = "tsid-session-map.json";
 const DEFAULT_RECENT_TURNS = 5;
 
-const SUMMARY_MODEL_ID = "qwen-max-latest";
-const SUMMARY_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+/** 总结模型配置（从 openclaw.json 动态读取） */
+interface SummaryConfig {
+  modelId: string;
+  baseUrl: string;
+  apiKey: string;
+}
 
 const MAX_MESSAGE_CHARS = 1000;
 const MAX_MESSAGES_TO_READ = 20;
@@ -462,9 +466,27 @@ export async function loadL2Session(params: {
 // LLM 调用
 // ========================
 
-function resolveDashscopeApiKey(): string {
-  const envKey = process.env.DASHSCOPE_API_KEY?.trim();
-  if (envKey) return envKey;
+/**
+ * 从 openclaw.json 读取当前主模型的配置，用于 L0/L1 总结
+ *
+ * 读取链路：
+ *   agents.defaults.model.primary → "provider/modelId"
+ *   → models.providers[provider] → { baseUrl, apiKey }
+ *
+ * 支持环境变量覆盖：
+ *   SUMMARY_MODEL_ID   → 覆盖模型 ID
+ *   SUMMARY_BASE_URL   → 覆盖 API 地址
+ *   SUMMARY_API_KEY    → 覆盖 API Key
+ */
+function resolveSummaryConfig(): SummaryConfig | null {
+  // 环境变量完整覆盖（三个都设置了才生效）
+  const envModel = process.env.SUMMARY_MODEL_ID?.trim();
+  const envUrl = process.env.SUMMARY_BASE_URL?.trim();
+  const envKey = process.env.SUMMARY_API_KEY?.trim();
+  if (envModel && envUrl && envKey) {
+    log.info(`[history] summary config from env: model=${envModel}`);
+    return { modelId: envModel, baseUrl: envUrl, apiKey: envKey };
+  }
 
   try {
     const configPath = path.join(
@@ -474,33 +496,63 @@ function resolveDashscopeApiKey(): string {
     );
     const raw = fs.readFileSync(configPath, "utf-8");
     const config = JSON.parse(raw);
-    const apiKey = config?.models?.providers?.dashscope?.apiKey?.trim();
-    if (apiKey) return apiKey;
-  } catch {
-    // ignore
-  }
 
-  log.info("[history] no dashscope apiKey found, summary disabled");
-  return "";
+    // 读取主模型: "dashscope/qwen3.5-flash" → provider="dashscope", modelId="qwen3.5-flash"
+    const primary: string | undefined = config?.agents?.defaults?.model?.primary;
+    if (!primary || !primary.includes("/")) {
+      log.info(`[history] no valid primary model in config (got: ${primary}), summary disabled`);
+      return null;
+    }
+
+    const slashIdx = primary.indexOf("/");
+    const providerName = primary.slice(0, slashIdx);
+    const modelId = primary.slice(slashIdx + 1);
+
+    if (!providerName || !modelId) {
+      log.info(`[history] failed to parse primary model: ${primary}`);
+      return null;
+    }
+
+    // 从 providers 中读取对应的 baseUrl 和 apiKey
+    const provider = config?.models?.providers?.[providerName];
+    if (!provider) {
+      log.info(`[history] provider "${providerName}" not found in config, summary disabled`);
+      return null;
+    }
+
+    const baseUrl = provider.baseUrl?.trim();
+    const apiKey = provider.apiKey?.trim();
+
+    if (!baseUrl || !apiKey) {
+      log.info(`[history] provider "${providerName}" missing baseUrl or apiKey, summary disabled`);
+      return null;
+    }
+
+    log.info(`[history] summary config: provider=${providerName}, model=${modelId}`);
+    return { modelId, baseUrl, apiKey };
+  } catch (err) {
+    log.info(`[history] failed to read openclaw.json: ${String(err)}`);
+    return null;
+  }
 }
 
 async function callSummaryLLM(params: {
-  apiKey: string;
+  config: SummaryConfig;
   system: string;
   user: string;
   maxTokens?: number;
 }): Promise<string | null> {
   try {
-    const url = `${SUMMARY_BASE_URL}/chat/completions`;
+    const url = `${params.config.baseUrl}/chat/completions`;
 
     const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${params.apiKey}`,
+        Authorization: `Bearer ${params.config.apiKey}`,
       },
       body: JSON.stringify({
-        model: SUMMARY_MODEL_ID,
+        model: params.config.modelId,
         messages: [
           { role: "system", content: params.system },
           { role: "user", content: params.user },
@@ -546,7 +598,7 @@ export async function appendTimelineEntry(params: {
   try {
     ensureHistoryDir(params.agentDir);
 
-    const apiKey = resolveDashscopeApiKey();
+    const summaryConfig = resolveSummaryConfig();
     const tsid = generateTsid();
     const dateStr = formatDate();
     const sessionId = params.sessionId || params.sessionKey;
@@ -557,11 +609,11 @@ export async function appendTimelineEntry(params: {
     const sessionsDir = getSessionsDir(params.agentDir);
     const fullConversation = readSessionMessages(sessionsDir, sessionId);
 
-    if (!apiKey || !fullConversation) {
+    if (!summaryConfig || !fullConversation) {
       const promptHead = params.prompt.slice(0, 80).replace(/\n/g, " ");
       const fallbackLine = `- ${tsid} | ${promptHead}...\n`;
       fs.appendFileSync(getTimelinePath(params.agentDir), fallbackLine, "utf-8");
-      log.info(`[history] L0 fallback (apiKey=${!!apiKey} conv=${!!fullConversation})`);
+      log.info(`[history] L0 fallback (config=${!!summaryConfig} conv=${!!fullConversation})`);
       return;
     }
 
@@ -596,7 +648,7 @@ ${toolList}
 
 请按格式生成 [L0] 和 [L1]。`;
 
-    const result = await callSummaryLLM({ apiKey, system, user, maxTokens: 800 });
+    const result = await callSummaryLLM({ config: summaryConfig, system, user, maxTokens: 800 });
 
     if (!result) {
       const promptHead = params.prompt.slice(0, 60).replace(/\n/g, " ");

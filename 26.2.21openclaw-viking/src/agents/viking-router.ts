@@ -205,6 +205,43 @@ interface RoutingModelResult {
   needsL2?: boolean;
 }
 
+/** 常见 provider 对应的环境变量名 */
+const PROVIDER_ENV_MAP: Record<string, string> = {
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  google: "GEMINI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  dashscope: "DASHSCOPE_API_KEY",
+  moonshot: "MOONSHOT_API_KEY",
+  siliconflow: "SILICONFLOW_API_KEY",
+  ark: "ARK_API_KEY",
+  groq: "GROQ_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  xai: "XAI_API_KEY",
+  qwen: "QWEN_API_KEY",
+};
+
+/** 判断是否是环境变量名而非真实 key */
+function looksLikeEnvVarName(value: string): boolean {
+  return /^[A-Z][A-Z0-9_]+$/.test(value);
+}
+
+/** 从环境变量中查找真实 apiKey */
+function resolveApiKeyFromEnv(hint?: string, providerName?: string): string {
+  if (hint && looksLikeEnvVarName(hint)) {
+    const val = process.env[hint]?.trim();
+    if (val && !looksLikeEnvVarName(val)) return val;
+  }
+  if (providerName) {
+    const envVar = PROVIDER_ENV_MAP[providerName.toLowerCase()];
+    if (envVar) {
+      const val = process.env[envVar]?.trim();
+      if (val && !looksLikeEnvVarName(val)) return val;
+    }
+  }
+  return "";
+}
+
 async function callRoutingModel(params: {
   model: Model<Api>;
   modelRegistry: ModelRegistry;
@@ -213,7 +250,16 @@ async function callRoutingModel(params: {
   user: string;
 }): Promise<RoutingModelResult | null> {
   try {
-    const apiKey = await params.modelRegistry.getApiKey(params.model) ?? "";
+    // apiKey 获取：modelRegistry → 环境变量 fallback
+    let apiKey = await params.modelRegistry.getApiKey(params.model) ?? "";
+    if (!apiKey || looksLikeEnvVarName(apiKey)) {
+      const envKey = resolveApiKeyFromEnv(
+        apiKey || undefined,
+        params.provider,
+      );
+      if (envKey) apiKey = envKey;
+    }
+
     const baseUrl = (
       typeof params.model.baseUrl === "string" ? params.model.baseUrl.trim() : ""
     ) || "http://localhost:11434/v1";
@@ -222,34 +268,50 @@ async function callRoutingModel(params: {
     const url = `${baseUrl}/chat/completions`;
     log.info(`[viking] routing call: model=${modelId} url=${url}`);
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-      },
-      body: JSON.stringify({
-        model: modelId,
-        messages: [
-          { role: "system", content: params.system },
-          { role: "user", content: params.user },
-        ],
-        max_tokens: 200,
-        temperature: 0,
-        stream: false,
-      }),
-    });
+    const baseBody = {
+      model: modelId,
+      messages: [
+        { role: "system", content: params.system },
+        { role: "user", content: params.user },
+      ],
+      max_tokens: 200,
+      stream: false,
+    };
 
-    if (!response.ok) {
-      const errText = await response.text().catch(() => "");
-      log.info(`[viking] routing API error ${response.status}: ${errText.slice(0, 200)}`);
-      return null;
+    // temperature 重试：先试 0，不支持则试 1
+    let responseText = "";
+    for (const temp of [0, 1]) {
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          },
+          body: JSON.stringify({ ...baseBody, temperature: temp }),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text().catch(() => "");
+          if (errText.includes("temperature")) {
+            log.info(`[viking] temperature=${temp} not supported, retrying`);
+            continue;
+          }
+          log.info(`[viking] routing API error ${response.status}: ${errText.slice(0, 200)}`);
+          return null;
+        }
+
+        const data = (await response.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        responseText = data.choices?.[0]?.message?.content ?? "";
+        break;
+      } catch (err) {
+        log.info(`[viking] routing call failed (temp=${temp}): ${String(err)}`);
+        if (temp === 1) return null;
+      }
     }
 
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const responseText = data.choices?.[0]?.message?.content ?? "";
     log.info(`[viking] routing response: ${responseText.slice(0, 300)}`);
 
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);

@@ -466,26 +466,101 @@ export async function loadL2Session(params: {
 // LLM 调用
 // ========================
 
+// ========================
+// 通用 apiKey 解析：支持 modelRegistry、环境变量、openclaw.json
+// ========================
+
+/** 常见 provider 对应的环境变量名 */
+const PROVIDER_ENV_MAP: Record<string, string> = {
+  openai: "OPENAI_API_KEY",
+  anthropic: "ANTHROPIC_API_KEY",
+  google: "GEMINI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
+  dashscope: "DASHSCOPE_API_KEY",
+  moonshot: "MOONSHOT_API_KEY",
+  siliconflow: "SILICONFLOW_API_KEY",
+  ark: "ARK_API_KEY",
+  groq: "GROQ_API_KEY",
+  mistral: "MISTRAL_API_KEY",
+  xai: "XAI_API_KEY",
+  deepgram: "DEEPGRAM_API_KEY",
+  cerebras: "CEREBRAS_API_KEY",
+  minimax: "MINIMAX_API_KEY",
+  qwen: "QWEN_API_KEY",
+};
+
+/**
+ * 判断一个字符串是否是环境变量名（全大写+下划线）而非真实 key
+ */
+function looksLikeEnvVarName(value: string): boolean {
+  return /^[A-Z][A-Z0-9_]+$/.test(value);
+}
+
+/**
+ * 从环境变量中查找真实 apiKey
+ * 优先级：精确匹配环境变量名 → provider 对应的环境变量 → 遍历所有已知环境变量
+ */
+function resolveApiKeyFromEnv(hint?: string, providerName?: string): string {
+  // 1. 如果 hint 本身就是环境变量名，直接去 process.env 取
+  if (hint && looksLikeEnvVarName(hint)) {
+    const val = process.env[hint]?.trim();
+    if (val && !looksLikeEnvVarName(val)) return val;
+  }
+
+  // 2. 根据 provider 名称查找对应的环境变量
+  if (providerName) {
+    const envVar = PROVIDER_ENV_MAP[providerName.toLowerCase()];
+    if (envVar) {
+      const val = process.env[envVar]?.trim();
+      if (val && !looksLikeEnvVarName(val)) return val;
+    }
+  }
+
+  // 3. 遍历所有已知的 API key 环境变量
+  for (const envVar of Object.values(PROVIDER_ENV_MAP)) {
+    const val = process.env[envVar]?.trim();
+    if (val && !looksLikeEnvVarName(val)) return val;
+  }
+
+  return "";
+}
+
 /**
  * 从 openclaw.json 读取当前主模型的配置，用于 L0/L1 总结
  *
- * 读取链路：
- *   agents.defaults.model.primary → "provider/modelId"
- *   → models.providers[provider] → { baseUrl, apiKey }
- *
- * 支持环境变量覆盖：
- *   SUMMARY_MODEL_ID   → 覆盖模型 ID
- *   SUMMARY_BASE_URL   → 覆盖 API 地址
- *   SUMMARY_API_KEY    → 覆盖 API Key
+ * apiKey 获取优先级：
+ *   1. SUMMARY_API_KEY 等环境变量完整覆盖
+ *   2. modelRegistry.getApiKey()（OpenClaw 框架）
+ *   3. openclaw.json 中的值（如果是环境变量名则去 process.env 取真实值）
+ *   4. 根据 provider 名称从 process.env 查找已知的 API key 环境变量
  */
-function resolveSummaryConfig(): SummaryConfig | null {
+async function resolveSummaryConfig(params?: {
+  model?: { id?: string; name?: string; baseUrl?: string | (() => string) };
+  modelRegistry?: { getApiKey?: (model: unknown) => Promise<string | null | undefined> };
+  provider?: string;
+}): Promise<SummaryConfig | null> {
   // 环境变量完整覆盖（三个都设置了才生效）
   const envModel = process.env.SUMMARY_MODEL_ID?.trim();
   const envUrl = process.env.SUMMARY_BASE_URL?.trim();
   const envKey = process.env.SUMMARY_API_KEY?.trim();
   if (envModel && envUrl && envKey) {
-    log.info(`[history] summary config from env: model=${envModel}`);
+    log.info(`[history] summary config from env override: model=${envModel}`);
     return { modelId: envModel, baseUrl: envUrl, apiKey: envKey };
+  }
+
+  // 尝试从 modelRegistry 获取 apiKey（OpenClaw 框架注入的真实 key）
+  let registryKey = "";
+  if (params?.modelRegistry?.getApiKey && params?.model) {
+    try {
+      registryKey = (await params.modelRegistry.getApiKey(params.model)) ?? "";
+      // 如果拿到的是环境变量名，从 process.env 解析
+      if (registryKey && looksLikeEnvVarName(registryKey)) {
+        const realKey = process.env[registryKey]?.trim();
+        registryKey = realKey && !looksLikeEnvVarName(realKey) ? realKey : "";
+      }
+    } catch {
+      // ignore
+    }
   }
 
   try {
@@ -497,7 +572,7 @@ function resolveSummaryConfig(): SummaryConfig | null {
     const raw = fs.readFileSync(configPath, "utf-8");
     const config = JSON.parse(raw);
 
-    // 读取主模型: "dashscope/qwen3.5-flash" → provider="dashscope", modelId="qwen3.5-flash"
+    // 读取主模型: "openai/gpt-5.2" → provider="openai", modelId="gpt-5.2"
     const primary: string | undefined = config?.agents?.defaults?.model?.primary;
     if (!primary || !primary.includes("/")) {
       log.info(`[history] no valid primary model in config (got: ${primary}), summary disabled`);
@@ -513,18 +588,31 @@ function resolveSummaryConfig(): SummaryConfig | null {
       return null;
     }
 
-    // 从 providers 中读取对应的 baseUrl 和 apiKey
+    // 从 providers 中读取 baseUrl
     const provider = config?.models?.providers?.[providerName];
-    if (!provider) {
-      log.info(`[history] provider "${providerName}" not found in config, summary disabled`);
+    const baseUrl = provider?.baseUrl?.trim() ?? "";
+
+    if (!baseUrl) {
+      log.info(`[history] provider "${providerName}" missing baseUrl, summary disabled`);
       return null;
     }
 
-    const baseUrl = provider.baseUrl?.trim();
-    const apiKey = provider.apiKey?.trim();
+    // apiKey 解析优先级：modelRegistry → openclaw.json (识别环境变量名) → process.env
+    let apiKey = registryKey;
 
-    if (!baseUrl || !apiKey) {
-      log.info(`[history] provider "${providerName}" missing baseUrl or apiKey, summary disabled`);
+    if (!apiKey) {
+      const configKey = provider?.apiKey?.trim() ?? "";
+      if (configKey && !looksLikeEnvVarName(configKey)) {
+        // openclaw.json 里直接是真实 key
+        apiKey = configKey;
+      } else {
+        // configKey 是环境变量名（如 "OPENAI_API_KEY"），或者为空，走环境变量解析
+        apiKey = resolveApiKeyFromEnv(configKey || undefined, providerName);
+      }
+    }
+
+    if (!apiKey) {
+      log.info(`[history] no apiKey resolved for provider "${providerName}", summary disabled`);
       return null;
     }
 
@@ -542,41 +630,59 @@ async function callSummaryLLM(params: {
   user: string;
   maxTokens?: number;
 }): Promise<string | null> {
-  try {
-    const url = `${params.config.baseUrl}/chat/completions`;
+  const maxTok = params.maxTokens ?? 500;
+  const url = `${params.config.baseUrl}/chat/completions`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${params.config.apiKey}`,
+  };
+  const baseBody = {
+    model: params.config.modelId,
+    messages: [
+      { role: "system", content: params.system },
+      { role: "user", content: params.user },
+    ],
+    stream: false,
+  };
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${params.config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: params.config.modelId,
-        messages: [
-          { role: "system", content: params.system },
-          { role: "user", content: params.user },
-        ],
-        max_tokens: params.maxTokens ?? 500,
-        temperature: 0,
-        stream: false,
-      }),
-    });
+  // 尝试不同参数组合：temperature × max_tokens 参数名
+  // 有些模型不支持 temperature:0（如 Kimi K2.5），有些不支持 max_tokens（如 OpenAI 新模型）
+  const temperatureOptions = [0, 1];
+  const tokenParamOptions = ["max_tokens", "max_completion_tokens"] as const;
 
-    if (!response.ok) {
-      const errText = await response.text().catch(() => "");
-      log.info(`[history] summary LLM error ${response.status}: ${errText.slice(0, 200)}`);
-      return null;
+  for (const temp of temperatureOptions) {
+    for (const tokenParam of tokenParamOptions) {
+      try {
+        const body = { ...baseBody, temperature: temp, [tokenParam]: maxTok };
+        const response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text().catch(() => "");
+          // 参数不兼容的错误，尝试下一个组合
+          if (errText.includes("temperature") || errText.includes("max_tokens") || errText.includes("max_completion_tokens")) {
+            log.info(`[history] summary LLM: temp=${temp} ${tokenParam} not supported, trying next`);
+            continue;
+          }
+          log.info(`[history] summary LLM error ${response.status}: ${errText.slice(0, 200)}`);
+          return null;
+        }
+
+        const data = (await response.json()) as {
+          choices?: Array<{ message?: { content?: string } }>;
+        };
+        return data.choices?.[0]?.message?.content?.trim() ?? null;
+      } catch (err) {
+        log.info(`[history] summary LLM call failed (temp=${temp}, ${tokenParam}): ${String(err)}`);
+      }
     }
-
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    return data.choices?.[0]?.message?.content?.trim() ?? null;
-  } catch (err) {
-    log.info(`[history] summary LLM call failed: ${String(err)}`);
-    return null;
   }
+
+  log.info("[history] summary LLM: all parameter combinations failed");
+  return null;
 }
 
 // ========================
@@ -598,7 +704,11 @@ export async function appendTimelineEntry(params: {
   try {
     ensureHistoryDir(params.agentDir);
 
-    const summaryConfig = resolveSummaryConfig();
+    const summaryConfig = await resolveSummaryConfig({
+      model: params.model as { id?: string; name?: string; baseUrl?: string | (() => string) },
+      modelRegistry: params.modelRegistry as { getApiKey?: (model: unknown) => Promise<string | null | undefined> },
+      provider: params.provider,
+    });
     const tsid = generateTsid();
     const dateStr = formatDate();
     const sessionId = params.sessionId || params.sessionKey;
